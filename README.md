@@ -2,7 +2,7 @@
 
 Run a full Wayland desktop inside a rootless podman container, driving your
 monitor directly via KMS/DRM. No host compositor, display manager, or Wayland/X
-installation needed — just podman and seatd.
+installation needed.
 
 The container runs labwc (a wlroots compositor) with systemd as PID 1, waybar,
 foot terminal, PipeWire audio, and Xwayland for X11 app compatibility.
