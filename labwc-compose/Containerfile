@@ -1,0 +1,297 @@
+# KMS Desktop — Labwc Wayland compositor on the physical display
+#
+# Build:
+#   podman compose build
+#
+# Run:
+#   podman compose up -d
+
+FROM registry.fedoraproject.org/fedora:43
+
+RUN dnf install --setopt=install_weak_deps=False --nodocs -y \
+    adwaita-cursor-theme \
+    adwaita-icon-theme \
+    alsa-utils \
+    bash-completion \
+    dbus-daemon \
+    fira-code-fonts \
+    foot \
+    fuzzel \
+    grim \
+    htop \
+    labwc \
+    libevdev \
+    libinput \
+    libseat \
+    mesa-dri-drivers \
+    mesa-libEGL \
+    mesa-libGL \
+    mesa-libgbm \
+    mesa-vulkan-drivers \
+    neovim \
+    pipewire \
+    pipewire-alsa \
+    pipewire-pulseaudio \
+    procps-ng \
+    slurp \
+    sudo \
+    swaybg \
+    systemd \
+    systemd-udev \
+    util-linux \
+    waybar \
+    wireplumber \
+    wl-clipboard \
+    xorg-x11-server-Xwayland \
+    && dnf clean all
+
+# --- Labwc compositor config ---
+
+RUN mkdir -p /etc/xdg/labwc && \
+    cat > /etc/xdg/labwc/rc.xml <<'XML'
+<?xml version="1.0"?>
+<labwc_config>
+  <theme>
+    <name>Adwaita</name>
+    <cornerRadius>8</cornerRadius>
+  </theme>
+
+  <keyboard>
+    <keybind key="W-Return">
+      <action name="Execute" command="foot" />
+    </keybind>
+    <keybind key="W-d">
+      <action name="Execute" command="fuzzel" />
+    </keybind>
+    <keybind key="W-q">
+      <action name="Close" />
+    </keybind>
+    <keybind key="W-f">
+      <action name="ToggleFullscreen" />
+    </keybind>
+    <keybind key="W-Escape">
+      <action name="Exit" />
+    </keybind>
+    <keybind key="A-Tab">
+      <action name="NextWindow" />
+    </keybind>
+  </keyboard>
+
+  <mouse>
+    <default />
+  </mouse>
+
+  <outputs>
+    <output name="*">
+      <transform>normal</transform>
+    </output>
+  </outputs>
+
+  <placement>
+    <policy>center</policy>
+  </placement>
+</labwc_config>
+XML
+
+# --- Foot terminal config ---
+
+RUN mkdir -p /etc/xdg/foot && \
+    cat > /etc/xdg/foot/foot.ini <<'INI'
+[main]
+font=Fira Code:size=14
+INI
+
+# --- Autostart: wallpaper, status bar, audio ---
+
+RUN cat > /etc/xdg/labwc/autostart <<'SH'
+#!/bin/bash
+swaybg -c '#2e3440' &
+waybar &
+
+# Audio — start PipeWire stack under labwc's D-Bus session
+# SPA's udev-based ALSA enumeration fails in containers (podman's /dev tmpfs
+# doesn't match the host udev database), so detect the analog card and configure
+# the PipeWire sink directly.
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
+alsa_card=""
+while IFS= read -r line; do
+    card_num=$(echo "$line" | sed -n 's/^card \([0-9]*\):.*/\1/p')
+    if [ -n "$card_num" ] && echo "$line" | grep -qi analog; then
+        alsa_card="hw:$card_num,0"
+        break
+    fi
+done < <(aplay -l 2>/dev/null)
+
+if [ -n "$alsa_card" ]; then
+    mkdir -p ~/.config/pipewire/pipewire.conf.d
+    cat > ~/.config/pipewire/pipewire.conf.d/10-alsa-sink.conf <<EOF
+context.objects = [
+    { factory = adapter
+        args = {
+            factory.name     = api.alsa.pcm.sink
+            node.name        = "alsa-sink"
+            node.description = "ALSA Analog Output"
+            media.class      = "Audio/Sink"
+            api.alsa.path    = "$alsa_card"
+        }
+    }
+]
+EOF
+    pipewire &
+    sleep 0.5
+    wireplumber &
+    pipewire-pulse &
+    amixer -c "$card_num" set Master unmute >/dev/null 2>&1
+    amixer -c "$card_num" set Master 74 >/dev/null 2>&1
+fi
+SH
+
+# --- Waybar config ---
+
+RUN mkdir -p /etc/xdg/waybar && \
+    cat > /etc/xdg/waybar/config <<'JSON'
+{
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "modules-left": ["custom/launcher", "wlr/taskbar"],
+    "modules-right": ["cpu", "memory", "clock"],
+    "custom/launcher": {
+        "format": " Apps",
+        "on-click": "fuzzel"
+    },
+    "wlr/taskbar": {
+        "format": "{title}",
+        "on-click": "activate"
+    },
+    "cpu": {
+        "format": "CPU {usage}%",
+        "interval": 5
+    },
+    "memory": {
+        "format": "RAM {percentage}%",
+        "interval": 5
+    },
+    "clock": {
+        "format": "{:%H:%M}",
+        "format-alt": "{:%Y-%m-%d %H:%M}"
+    }
+}
+JSON
+
+# --- journald sandbox drop-in ---
+# Clear directives that need capabilities unavailable in a user namespace
+
+RUN mkdir -p /etc/systemd/system/systemd-journald.service.d && \
+    cat > /etc/systemd/system/systemd-journald.service.d/10-container.conf <<'DROPIN'
+[Service]
+CapabilityBoundingSet=
+IPAddressDeny=
+LockPersonality=no
+MemoryDenyWriteExecute=no
+NoNewPrivileges=no
+ProtectClock=no
+RestrictAddressFamilies=
+RestrictNamespaces=no
+RestrictRealtime=no
+RestrictSUIDSGID=no
+SystemCallArchitectures=
+SystemCallFilter=
+DROPIN
+
+# --- Compositor systemd service ---
+# ExecStartPre creates XDG_RUNTIME_DIR with correct ownership (tmpfs is fresh
+# each boot). setpriv drops to the regular user while preserving host device
+# group access (video, render, input, seat) via --keep-groups.
+
+RUN cat > /usr/lib/systemd/system/labwc.service <<'UNIT'
+[Unit]
+Description=Labwc Wayland Compositor
+After=container-bootstrap.service
+ConditionPathExists=/run/seatd.sock
+
+[Service]
+Type=simple
+PassEnvironment=CONTAINER_UID CONTAINER_GID CONTAINER_USER
+
+Environment=LIBSEAT_BACKEND=seatd
+Environment=SEATD_SOCK=/run/seatd.sock
+Environment=WLR_BACKENDS=drm,libinput
+Environment=WLR_NO_HARDWARE_CURSORS=1
+Environment=WLR_DRM_NO_MODIFIERS=1
+
+ExecStartPre=/bin/sh -c 'chown ${CONTAINER_UID}:${CONTAINER_GID} /run/user/${CONTAINER_UID} && chmod 0700 /run/user/${CONTAINER_UID}'
+ExecStart=/usr/bin/setpriv --reuid=${CONTAINER_UID} --regid=${CONTAINER_GID} --keep-groups -- /bin/sh -c 'export HOME=/home/${CONTAINER_USER} XDG_RUNTIME_DIR=/run/user/${CONTAINER_UID} && cd && exec /usr/bin/dbus-run-session /usr/bin/labwc'
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# --- Bootstrap oneshot: first-boot user/groups/sudo setup ---
+
+RUN cat > /usr/local/bin/container-bootstrap <<'SCRIPT'
+#!/bin/bash
+set -e
+: "${CONTAINER_USER:?must be set}"
+: "${CONTAINER_UID:?must be set}"
+: "${CONTAINER_GID:?must be set}"
+
+HOME_DIR="/home/$CONTAINER_USER"
+
+# User and home
+groupadd -g "$CONTAINER_GID" "$CONTAINER_USER" 2>/dev/null || true
+useradd -u "$CONTAINER_UID" -g "$CONTAINER_GID" -d "$HOME_DIR" -s /bin/bash -M "$CONTAINER_USER" 2>/dev/null || true
+mkdir -p "$HOME_DIR/.local/state"
+chown -R "$CONTAINER_UID:$CONTAINER_GID" "$HOME_DIR"
+
+# Supplementary groups (so 'id' shows names not numbers)
+[ -n "${HOST_VIDEO_GID:-}" ] && { groupadd -g "$HOST_VIDEO_GID" video 2>/dev/null || true; }
+[ -n "${HOST_RENDER_GID:-}" ] && { groupadd -g "$HOST_RENDER_GID" render 2>/dev/null || true; }
+[ -n "${HOST_INPUT_GID:-}" ] && { groupadd -g "$HOST_INPUT_GID" input 2>/dev/null || true; }
+
+# Sudo
+mkdir -p /etc/sudoers.d
+echo "$CONTAINER_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/container-user
+chmod 0440 /etc/sudoers.d/container-user
+
+# Shell prompt
+if ! grep -q 'PS1=' "$HOME_DIR/.bashrc" 2>/dev/null; then
+    cat >> "$HOME_DIR/.bashrc" <<'PROMPT'
+if [ "$PS1" ]; then
+    PS1='\[\033[01;32m\]\u@\h:\w\$\[\033[0m\] '
+fi
+PROMPT
+    chown "$CONTAINER_UID:$CONTAINER_GID" "$HOME_DIR/.bashrc"
+fi
+
+echo "Bootstrap complete."
+SCRIPT
+
+RUN cat > /usr/lib/systemd/system/container-bootstrap.service <<'UNIT'
+[Unit]
+Description=First-boot container bootstrap
+ConditionPathExists=!/etc/container-bootstrapped
+DefaultDependencies=no
+Before=labwc.service
+
+[Service]
+Type=oneshot
+PassEnvironment=CONTAINER_USER CONTAINER_UID CONTAINER_GID HOST_VIDEO_GID HOST_RENDER_GID HOST_INPUT_GID
+ExecStart=/usr/local/bin/container-bootstrap
+ExecStartPost=/bin/touch /etc/container-bootstrapped
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# Mask udevd, chmod autostart, enable services
+RUN mkdir -p /etc/systemd/system && \
+    ln -sf /dev/null /etc/systemd/system/systemd-udevd.service && \
+    ln -sf /dev/null /etc/systemd/system/systemd-udevd-control.socket && \
+    ln -sf /dev/null /etc/systemd/system/systemd-udevd-kernel.socket && \
+    systemctl enable labwc container-bootstrap && \
+    chmod +x /etc/xdg/labwc/autostart /usr/local/bin/container-bootstrap
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/usr/sbin/init"]

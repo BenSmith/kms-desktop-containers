@@ -1,0 +1,63 @@
+# KMS Desktop — podman compose up -d
+#
+# Prerequisites:
+#   1. sudo systemctl enable --now seatd
+#   2. sudo usermod -aG seat,input,video,render $USER (then log out/in)
+#   3. ./setup.sh    (generates .env with UID/GID/group info)
+#   4. podman compose up -d
+
+services:
+  desktop:
+    container_name: desktop
+    hostname: desktop
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/desktop-kms:latest
+
+    network_mode: host
+    userns_mode: keep-id
+    group_add:
+      - keep-groups
+
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETUID
+      - SETGID
+      - FSETID
+      - KILL
+      - NET_BIND_SERVICE
+      - SETFCAP
+      - SETPCAP
+      - SYS_CHROOT
+      - SYS_NICE
+
+    devices:
+      - /dev/dri
+      - /dev/input
+      - /dev/snd
+
+    volumes:
+      - /run/seatd.sock:/run/seatd.sock
+      - /run/udev:/run/udev:ro
+      - desktop-home:/home/${DESKTOP_USER}
+
+    tmpfs:
+      - /run/user/${DESKTOP_UID}:mode=0700
+
+    environment:
+      CONTAINER_USER: ${DESKTOP_USER}
+      CONTAINER_UID: ${DESKTOP_UID}
+      CONTAINER_GID: ${DESKTOP_GID}
+      HOST_VIDEO_GID: ${HOST_VIDEO_GID}
+      HOST_RENDER_GID: ${HOST_RENDER_GID}
+      HOST_INPUT_GID: ${HOST_INPUT_GID}
+
+    stop_signal: SIGRTMIN+3
+
+volumes:
+  desktop-home:
