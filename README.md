@@ -167,6 +167,10 @@ Default rootless:  container UID 0    → host UID 1000  (systemd runs as root i
 Added via +uidmap: container UID 1000 → host UID 1000  (desktop user owns its files)
 ```
 
+This means systemd (PID 1) runs as UID 0 inside the container — normal init
+behavior — while the desktop user (UID 1000) maps to the same host UID, so
+bind-mounted home directory files have correct ownership in both contexts.
+
 `--group-add=keep-groups` preserves host supplementary GIDs (video, render,
 input, seat) on PID 1. The labwc service uses `setpriv --keep-groups` to drop
 to your user without calling `setgroups()`, which would wipe those GIDs. This
