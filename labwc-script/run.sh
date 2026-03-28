@@ -126,8 +126,12 @@ create_container() {
         --hostname "$name" \
         --systemd=always \
         --network=host \
-        --userns=keep-id \
+        --uidmap "+$host_uid:@$host_uid:1" \
+        --gidmap "+$host_gid:@$host_gid:1" \
         --group-add=keep-groups \
+        \
+        --shm-size=2g \
+        --security-opt=label=disable \
         \
         --cap-drop=ALL \
         --cap-add=CHOWN \
@@ -149,7 +153,6 @@ create_container() {
         \
         -v /run/seatd.sock:/run/seatd.sock \
         -v /run/udev:/run/udev:ro \
-        --tmpfs "/run/user/$host_uid:mode=0700" \
         -v "$home_dir:/home/$host_user" \
         \
         -e "CONTAINER_USER=$host_user" \

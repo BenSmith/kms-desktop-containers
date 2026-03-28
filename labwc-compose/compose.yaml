@@ -15,10 +15,24 @@ services:
       dockerfile: Containerfile
     image: localhost/desktop-kms:latest
 
+    # Required for systemd (PID 1) to work correctly inside the container.
+    # podman-compose does not auto-detect this; without it cgroup setup is wrong
+    # and systemctl cannot connect to the manager.
+    podman_systemd: always
+
     network_mode: host
-    userns_mode: keep-id
     group_add:
       - keep-groups
+
+    # Supplemental UID/GID mapping: default rootless maps host UID 1000 →
+    # container UID 0. The + lines additionally map host UID/GID 1000 →
+    # container UID/GID 1000. Combined: systemd runs as container root;
+    # the desktop user (UID 1000) can own its files correctly in both contexts.
+    x-podman:
+      uidmap:
+        - "+${DESKTOP_UID}:@${DESKTOP_UID}:1"
+      gidmap:
+        - "+${DESKTOP_GID}:@${DESKTOP_GID}:1"
 
     cap_drop:
       - ALL
@@ -46,9 +60,6 @@ services:
       - /run/udev:/run/udev:ro
       - desktop-home:/home/${DESKTOP_USER}
 
-    tmpfs:
-      - /run/user/${DESKTOP_UID}:mode=0700
-
     environment:
       CONTAINER_USER: ${DESKTOP_USER}
       CONTAINER_UID: ${DESKTOP_UID}
@@ -56,6 +67,16 @@ services:
       HOST_VIDEO_GID: ${HOST_VIDEO_GID}
       HOST_RENDER_GID: ${HOST_RENDER_GID}
       HOST_INPUT_GID: ${HOST_INPUT_GID}
+
+    # 2 GB of shared memory — Firefox's multi-process IPC exceeds the 63MB
+    # Podman default, causing SIGBUS -> null pointer crashes in libxul.so.
+    shm_size: 2g
+
+    security_opt:
+      # Disable SELinux container label so Firefox's JIT can mprotect pages as
+      # executable. Without this, SELinux deny_execmem causes segfaults in
+      # libxul.so (Red Hat bug #1726682).
+      - label=disable
 
     stop_signal: SIGRTMIN+3
 

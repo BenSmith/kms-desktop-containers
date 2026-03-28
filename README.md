@@ -9,18 +9,18 @@ foot terminal, PipeWire audio, and Xwayland for X11 app compatibility.
 
 ## Variants
 
-### [desktop-kms-compose](desktop-kms-compose/)
+### [labwc-compose](labwc-compose/)
 
 Declarative setup using `podman compose`. A `compose.yaml` defines all container
-flags, a `setup.sh` generates the `.env` with your UID/GID and device group IDs,
-and a systemd oneshot service handles first-boot user creation automatically.
+flags and a `setup.sh` generates the `.env` with your UID/GID and device group
+IDs. The desktop user is created at first boot from those values.
 
 ```bash
 ./setup.sh
 podman compose up -d
 ```
 
-### [desktop-kms-standalone](desktop-kms-standalone/)
+### [labwc-script](labwc-script/)
 
 Single shell script (`run.sh`) that builds the image, creates the container with
 the right podman flags, bootstraps the user, and starts it. More explicit — you
@@ -36,6 +36,28 @@ can read exactly what it does.
 - seatd running on the host: `sudo systemctl enable --now seatd`
 - User in groups: `sudo usermod -aG seat,input,video,render $USER` (log out/in after)
 - GPU with KMS support (`/dev/dri` present)
+
+## User namespace design
+
+These containers use rootless podman with a dual UID mapping instead of
+`--userns=keep-id`:
+
+```
+Default rootless:  container UID 0   → host UID 1000  (the calling user)
+Added via +uidmap: container UID 1000 → host UID 1000  (same host UID)
+```
+
+This means systemd (PID 1) runs as **UID 0 inside the container** — normal init
+behavior with full capability management. The desktop user runs as **UID 1000**,
+which also maps to the same host UID, so bind-mounted home directory files have
+correct ownership in both contexts.
+
+On first boot a oneshot root service (`container-bootstrap.service`) creates the
+desktop user account from `CONTAINER_USER/UID/GID` environment variables, sets
+up passwordless sudo, and creates named supplementary groups for video/render/input.
+The compositor service then uses `setpriv --reuid --regid --keep-groups` to drop
+from root to the desktop user while preserving the host device GIDs inherited via
+`--group-add=keep-groups`.
 
 ## GPU support
 
@@ -54,11 +76,11 @@ All capabilities are dropped, then only the needed ones are added back:
 
 | Capability | Why |
 |---|---|
-| `CHOWN` | Bootstrap: `chown` home directory and runtime dir to container user |
-| `DAC_OVERRIDE` | Bootstrap: write to `/etc/sudoers.d`, `/etc/systemd/system` as root |
-| `FOWNER` | Bootstrap: modify ownership of files not owned by the process |
-| `SETUID` | Bootstrap: `useradd`, `setpriv --reuid` in labwc service |
-| `SETGID` | Bootstrap: `groupadd`, `setpriv --regid` in labwc service |
+| `CHOWN` | Bootstrap: `chown` home directory and runtime dir to desktop user |
+| `DAC_OVERRIDE` | Bootstrap: write to `/etc/sudoers.d`, `/etc/passwd` as root |
+| `FOWNER` | Bootstrap: set ownership of files not owned by the process |
+| `SETUID` | Bootstrap: `useradd`; compositor: `setpriv --reuid` |
+| `SETGID` | Bootstrap: `groupadd`; compositor: `setpriv --regid` |
 | `FSETID` | systemd: preserve setuid/setgid bits during file operations |
 | `KILL` | systemd: send signals to managed services |
 | `NET_BIND_SERVICE` | systemd: bind to privileged ports if needed |
@@ -148,11 +170,6 @@ There may be many, it's a new experiment.
 
 ### Not designed for nested containers
 The container is designed to run as a rootless podman container.
-
-### Firefox crashes (Firefox 148 + AMD Vega 10)
-
-Firefox 148 on Fedora 43 with AMD Vega 10 (and possibly other GPUs) has null
-pointer crashes in `libxul.so`. Haven't tracked this issue down yet.
 
 ### NVIDIA proprietary drivers
 

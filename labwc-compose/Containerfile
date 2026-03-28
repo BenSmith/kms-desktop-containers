@@ -15,6 +15,7 @@ RUN dnf install --setopt=install_weak_deps=False --nodocs -y \
     bash-completion \
     dbus-daemon \
     fira-code-fonts \
+    firefox \
     foot \
     fuzzel \
     grim \
@@ -44,6 +45,19 @@ RUN dnf install --setopt=install_weak_deps=False --nodocs -y \
     wl-clipboard \
     xorg-x11-server-Xwayland \
     && dnf clean all
+
+# --- Firefox stability fixes ---
+# Disable Wayland vsync: Firefox freezes under wlroots compositors (labwc,
+# sway, etc.) without mouse movement. Mozilla bug #1954343.
+# The shm exhaustion fix (SIGBUS -> null pointer in libxul) is handled at
+# runtime by shm_size: 2g in compose.yaml.
+
+RUN mkdir -p /usr/lib/firefox/browser/defaults/preferences && \
+    cat > /usr/lib/firefox/browser/defaults/preferences/99-container.js <<'JS'
+// Disable Wayland vsync — Firefox freezes under wlroots compositors (labwc,
+// sway, niri) without this. Mozilla bug #1954343.
+pref("widget.wayland.vsync.enabled", false);
+JS
 
 # --- Labwc compositor config ---
 
@@ -180,9 +194,6 @@ RUN mkdir -p /etc/xdg/waybar && \
 }
 JSON
 
-# --- journald sandbox drop-in ---
-# Clear directives that need capabilities unavailable in a user namespace
-
 RUN mkdir -p /etc/systemd/system/systemd-journald.service.d && \
     cat > /etc/systemd/system/systemd-journald.service.d/10-container.conf <<'DROPIN'
 [Service]
@@ -220,6 +231,7 @@ Environment=SEATD_SOCK=/run/seatd.sock
 Environment=WLR_BACKENDS=drm,libinput
 Environment=WLR_NO_HARDWARE_CURSORS=1
 Environment=WLR_DRM_NO_MODIFIERS=1
+Environment=MOZ_ENABLE_WAYLAND=1
 
 ExecStartPre=/bin/sh -c 'chown ${CONTAINER_UID}:${CONTAINER_GID} /run/user/${CONTAINER_UID} && chmod 0700 /run/user/${CONTAINER_UID}'
 ExecStart=/usr/bin/setpriv --reuid=${CONTAINER_UID} --regid=${CONTAINER_GID} --keep-groups -- /bin/sh -c 'export HOME=/home/${CONTAINER_USER} XDG_RUNTIME_DIR=/run/user/${CONTAINER_UID} && cd && exec /usr/bin/dbus-run-session /usr/bin/labwc'
@@ -253,6 +265,7 @@ chown -R "$CONTAINER_UID:$CONTAINER_GID" "$HOME_DIR"
 # Sudo
 mkdir -p /etc/sudoers.d
 echo "$CONTAINER_USER ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/container-user
+chown 0:0 /etc/sudoers.d/container-user
 chmod 0440 /etc/sudoers.d/container-user
 
 # Shell prompt
@@ -273,6 +286,7 @@ RUN cat > /usr/lib/systemd/system/container-bootstrap.service <<'UNIT'
 Description=First-boot container bootstrap
 ConditionPathExists=!/etc/container-bootstrapped
 DefaultDependencies=no
+After=sysinit.target
 Before=labwc.service
 
 [Service]

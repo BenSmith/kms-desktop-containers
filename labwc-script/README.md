@@ -36,16 +36,18 @@ and starts it. Everything else happens inside via systemd:
    - `--device /dev/dri`, `/dev/input`, `/dev/snd` — GPU, input, audio
    - `/run/seatd.sock` — DRM master and VT management
    - `/run/udev:ro` — device enumeration database
-   - `--userns=keep-id --group-add=keep-groups` — host user mapped into
-     container, supplementary groups (video, render, input, seat) preserved for
-     device access
+   - `--uidmap "+$UID:@$UID:1" --gidmap "+$GID:@$GID:1"` — adds a mapping so
+     container UID/GID 1000 resolves to the host user; systemd (PID 1) still
+     runs as container root (UID 0) via the default rootless mapping
+   - `--group-add=keep-groups` — supplementary GIDs (video, render, input, seat)
+     preserved on PID 1 for device access
    - Environment variables with host UID/GID and device group IDs
 
 3. **Start** — systemd boots inside the container and runs:
    - `container-bootstrap.service` (first boot only) — creates the user account,
-     supplementary groups, sudo, and shell prompt
-   - `labwc.service` — fixes XDG_RUNTIME_DIR ownership, then launches the
-     compositor via setpriv + dbus-run-session
+     supplementary groups, and sudo
+   - `labwc.service` — creates `/run/user/$UID` as root, then drops to the
+     desktop user via `setpriv --keep-groups` and launches the compositor
 
 ## Keybindings
 
