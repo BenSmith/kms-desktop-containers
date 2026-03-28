@@ -100,10 +100,11 @@ create_container() {
     host_gid=$(id -g)
     host_user=$(whoami)
 
-    local video_gid render_gid input_gid
+    local video_gid render_gid input_gid seat_gid
     video_gid=$(get_host_gid video)
     render_gid=$(get_host_gid render)
     input_gid=$(get_host_gid input)
+    seat_gid=$(get_host_gid seat)
 
     # Home directory for the container (persistent across recreates)
     local home_dir="$HOME/.local/share/desktop-kms/$name"
@@ -112,6 +113,15 @@ create_container() {
     echo "Creating container $name..."
     echo "  User: $host_user ($host_uid:$host_gid)"
     echo "  Home: $home_dir"
+
+    # KVM/virtio-gpu tuning: pixman avoids virgl fence round-trips (~27x faster
+    # than gles2); virtio-gpu lacks hardware cursor planes and has limited
+    # modifier support. Remove these on bare metal.
+    local kvm_env=(
+        -e "WLR_RENDERER=pixman"
+        -e "WLR_NO_HARDWARE_CURSORS=1"
+        -e "WLR_DRM_NO_MODIFIERS=1"
+    )
 
     # Collect --device flags for input (keyboards, mice, tablets)
     local input_devices=()
@@ -150,6 +160,7 @@ create_container() {
         --device=/dev/dri \
         "${input_devices[@]}" \
         --device=/dev/snd \
+        $([ -e /dev/udmabuf ] && echo --device=/dev/udmabuf) \
         \
         -v /run/seatd.sock:/run/seatd.sock \
         -v /run/udev:/run/udev:ro \
@@ -161,6 +172,9 @@ create_container() {
         -e "HOST_VIDEO_GID=${video_gid}" \
         -e "HOST_RENDER_GID=${render_gid}" \
         -e "HOST_INPUT_GID=${input_gid}" \
+        -e "HOST_SEAT_GID=${seat_gid}" \
+        \
+        "${kvm_env[@]}" \
         \
         "$IMAGE"
 }

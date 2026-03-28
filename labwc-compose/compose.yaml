@@ -28,11 +28,10 @@ services:
     # container UID 0. The + lines additionally map host UID/GID 1000 →
     # container UID/GID 1000. Combined: systemd runs as container root;
     # the desktop user (UID 1000) can own its files correctly in both contexts.
-    x-podman:
-      uidmap:
-        - "+${DESKTOP_UID}:@${DESKTOP_UID}:1"
-      gidmap:
-        - "+${DESKTOP_GID}:@${DESKTOP_GID}:1"
+    x-podman.uidmaps:
+      - "+${DESKTOP_UID}:@${DESKTOP_UID}:1"
+    x-podman.gidmaps:
+      - "+${DESKTOP_GID}:@${DESKTOP_GID}:1"
 
     cap_drop:
       - ALL
@@ -54,6 +53,8 @@ services:
       - /dev/dri
       - /dev/input
       - /dev/snd
+      # Uncomment for KVM guests with Venus Vulkan (blob resource support):
+      # - /dev/udmabuf
 
     volumes:
       - /run/seatd.sock:/run/seatd.sock
@@ -67,6 +68,13 @@ services:
       HOST_VIDEO_GID: ${HOST_VIDEO_GID}
       HOST_RENDER_GID: ${HOST_RENDER_GID}
       HOST_INPUT_GID: ${HOST_INPUT_GID}
+      HOST_SEAT_GID: ${HOST_SEAT_GID}
+      # KVM/virtio-gpu: pixman avoids virgl fence round-trips (~27x faster than
+      # gles2); virtio-gpu lacks hardware cursor planes and has limited modifier
+      # support. Uncomment these three lines on kvm host, comment on bare metal host.
+      # WLR_RENDERER: pixman
+      # WLR_NO_HARDWARE_CURSORS: "1"
+      # WLR_DRM_NO_MODIFIERS: "1"
 
     # 2 GB of shared memory — Firefox's multi-process IPC exceeds the 63MB
     # Podman default, causing SIGBUS -> null pointer crashes in libxul.so.

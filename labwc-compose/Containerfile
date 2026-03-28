@@ -18,6 +18,7 @@ RUN dnf install --setopt=install_weak_deps=False --nodocs -y \
     firefox \
     foot \
     fuzzel \
+    google-noto-sans-fonts \
     grim \
     htop \
     labwc \
@@ -28,10 +29,14 @@ RUN dnf install --setopt=install_weak_deps=False --nodocs -y \
     mesa-libEGL \
     mesa-libGL \
     mesa-libgbm \
+    mesa-va-drivers \
     mesa-vulkan-drivers \
+    vulkan-loader \
+    vulkan-tools \
     neovim \
     pipewire \
     pipewire-alsa \
+    pipewire-jack-audio-connection-kit \
     pipewire-pulseaudio \
     procps-ng \
     slurp \
@@ -43,6 +48,9 @@ RUN dnf install --setopt=install_weak_deps=False --nodocs -y \
     waybar \
     wireplumber \
     wl-clipboard \
+    xdg-desktop-portal \
+    xdg-desktop-portal-wlr \
+    xdg-utils \
     xorg-x11-server-Xwayland \
     && dnf clean all
 
@@ -58,6 +66,20 @@ RUN mkdir -p /usr/lib/firefox/browser/defaults/preferences && \
 // sway, niri) without this. Mozilla bug #1954343.
 pref("widget.wayland.vsync.enabled", false);
 JS
+
+# --- GTK settings: theme, icons, cursor, font ---
+# System-wide defaults so GTK apps look consistent out of the box.
+
+RUN mkdir -p /etc/gtk-3.0 /etc/gtk-4.0 && \
+    cat > /etc/gtk-3.0/settings.ini <<'INI'
+[Settings]
+gtk-theme-name=Adwaita
+gtk-icon-theme-name=Adwaita
+gtk-cursor-theme-name=Adwaita
+gtk-cursor-theme-size=24
+gtk-font-name=Noto Sans 11
+INI
+RUN cp /etc/gtk-3.0/settings.ini /etc/gtk-4.0/settings.ini
 
 # --- Labwc compositor config ---
 
@@ -153,11 +175,11 @@ context.objects = [
 ]
 EOF
     pipewire &
-    sleep 0.5
+    sleep 1
     wireplumber &
     pipewire-pulse &
-    amixer -c "$card_num" set Master unmute >/dev/null 2>&1
-    amixer -c "$card_num" set Master 74 >/dev/null 2>&1
+    sleep 1
+    amixer -c "$card_num" sset Master 74% unmute >/dev/null 2>&1
 fi
 SH
 
@@ -225,15 +247,19 @@ ConditionPathExists=/run/seatd.sock
 [Service]
 Type=simple
 PassEnvironment=CONTAINER_UID CONTAINER_GID CONTAINER_USER
+# KVM/virtio-gpu tuning — pass these from the host (compose.yaml or run.sh).
+# Leave unset on bare metal; wlroots will auto-select the best renderer/caps.
+PassEnvironment=WLR_RENDERER WLR_NO_HARDWARE_CURSORS WLR_DRM_NO_MODIFIERS
 
 Environment=LIBSEAT_BACKEND=seatd
 Environment=SEATD_SOCK=/run/seatd.sock
 Environment=WLR_BACKENDS=drm,libinput
-Environment=WLR_NO_HARDWARE_CURSORS=1
-Environment=WLR_DRM_NO_MODIFIERS=1
 Environment=MOZ_ENABLE_WAYLAND=1
+Environment=XDG_CURRENT_DESKTOP=wlroots
+Environment=XCURSOR_THEME=Adwaita
+Environment=XCURSOR_SIZE=24
 
-ExecStartPre=/bin/sh -c 'chown ${CONTAINER_UID}:${CONTAINER_GID} /run/user/${CONTAINER_UID} && chmod 0700 /run/user/${CONTAINER_UID}'
+ExecStartPre=/bin/sh -c 'mkdir -p /run/user/${CONTAINER_UID} && chown ${CONTAINER_UID}:${CONTAINER_GID} /run/user/${CONTAINER_UID} && chmod 0700 /run/user/${CONTAINER_UID}'
 ExecStart=/usr/bin/setpriv --reuid=${CONTAINER_UID} --regid=${CONTAINER_GID} --keep-groups -- /bin/sh -c 'export HOME=/home/${CONTAINER_USER} XDG_RUNTIME_DIR=/run/user/${CONTAINER_UID} && cd && exec /usr/bin/dbus-run-session /usr/bin/labwc'
 
 [Install]
@@ -261,6 +287,7 @@ chown -R "$CONTAINER_UID:$CONTAINER_GID" "$HOME_DIR"
 [ -n "${HOST_VIDEO_GID:-}" ] && { groupadd -g "$HOST_VIDEO_GID" video 2>/dev/null || true; }
 [ -n "${HOST_RENDER_GID:-}" ] && { groupadd -g "$HOST_RENDER_GID" render 2>/dev/null || true; }
 [ -n "${HOST_INPUT_GID:-}" ] && { groupadd -g "$HOST_INPUT_GID" input 2>/dev/null || true; }
+[ -n "${HOST_SEAT_GID:-}" ] && { groupadd -g "$HOST_SEAT_GID" seat 2>/dev/null || true; }
 
 # Sudo
 mkdir -p /etc/sudoers.d
@@ -291,7 +318,7 @@ Before=labwc.service
 
 [Service]
 Type=oneshot
-PassEnvironment=CONTAINER_USER CONTAINER_UID CONTAINER_GID HOST_VIDEO_GID HOST_RENDER_GID HOST_INPUT_GID
+PassEnvironment=CONTAINER_USER CONTAINER_UID CONTAINER_GID HOST_VIDEO_GID HOST_RENDER_GID HOST_INPUT_GID HOST_SEAT_GID
 ExecStart=/usr/local/bin/container-bootstrap
 ExecStartPost=/bin/touch /etc/container-bootstrapped
 
@@ -299,11 +326,13 @@ ExecStartPost=/bin/touch /etc/container-bootstrapped
 WantedBy=multi-user.target
 UNIT
 
-# Mask udevd, chmod autostart, enable services
+# Mask udevd (host udev DB is bind-mounted) and rtkit-daemon (fails in
+# user-namespaced containers; PipeWire falls back to normal scheduling).
 RUN mkdir -p /etc/systemd/system && \
     ln -sf /dev/null /etc/systemd/system/systemd-udevd.service && \
     ln -sf /dev/null /etc/systemd/system/systemd-udevd-control.socket && \
     ln -sf /dev/null /etc/systemd/system/systemd-udevd-kernel.socket && \
+    ln -sf /dev/null /etc/systemd/system/rtkit-daemon.service && \
     systemctl enable labwc container-bootstrap && \
     chmod +x /etc/xdg/labwc/autostart /usr/local/bin/container-bootstrap
 

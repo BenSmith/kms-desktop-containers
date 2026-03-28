@@ -39,6 +39,7 @@ DESKTOP_GID=$(id -g)
 HOST_VIDEO_GID=$(get_gid video)
 HOST_RENDER_GID=$(get_gid render)
 HOST_INPUT_GID=$(get_gid input)
+HOST_SEAT_GID=$(get_gid seat)
 EOF
 
 echo "Generated .env:"
