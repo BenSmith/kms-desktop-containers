@@ -62,6 +62,16 @@ podman start [name]      # restart a stopped container
 
 Both launchers produce the same container from the same image.
 
+### Stopping the desktop
+
+**`Super+Escape`** exits the compositor. The container keeps running and labwc
+restarts automatically (it is configured with `Restart=on-failure`). Use this
+to recover from a broken compositor state.
+
+**`podman compose down`** / **`./run.sh --stop`** sends SIGRTMIN+3 to systemd
+inside the container, which shuts everything down cleanly and releases the GPU,
+input devices, and audio.
+
 ## KVM vs bare metal
 
 The image is the same either way. Three variables tune the compositor for

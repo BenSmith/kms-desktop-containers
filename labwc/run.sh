@@ -123,13 +123,14 @@ create_container() {
         -e "WLR_DRM_NO_MODIFIERS=1"
     )
 
-    # Collect --device flags for input (keyboards, mice, tablets)
-    local input_devices=()
-    input_devices+=(--device /dev/input)
-    [ -e /dev/uinput ] && input_devices+=(--device /dev/uinput)
+    # Collect --device flags for input (keyboards, mice, tablets) and optional devices
+    local extra_devices=()
+    extra_devices+=(--device /dev/input)
+    [ -e /dev/uinput ] && extra_devices+=(--device /dev/uinput)
     for dev in /dev/hidraw*; do
-        [ -e "$dev" ] && input_devices+=(--device "$dev")
+        [ -e "$dev" ] && extra_devices+=(--device "$dev")
     done
+    [ -e /dev/udmabuf ] && extra_devices+=(--device /dev/udmabuf)
 
     podman create \
         --name "$name" \
@@ -158,9 +159,8 @@ create_container() {
         --cap-add=SYS_NICE \
         \
         --device=/dev/dri \
-        "${input_devices[@]}" \
+        "${extra_devices[@]}" \
         --device=/dev/snd \
-        $([ -e /dev/udmabuf ] && echo --device=/dev/udmabuf) \
         \
         -v /run/seatd.sock:/run/seatd.sock \
         -v /run/udev:/run/udev:ro \

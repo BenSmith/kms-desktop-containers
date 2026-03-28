@@ -175,10 +175,18 @@ context.objects = [
 ]
 EOF
     pipewire &
-    sleep 1
+    i=0
+    until [ -S "$XDG_RUNTIME_DIR/pipewire-0" ]; do
+        sleep 0.1; i=$((i+1))
+        [ $i -ge 100 ] && { echo "audio: PipeWire failed to start" >&2; exit 1; }
+    done
     wireplumber &
     pipewire-pulse &
-    sleep 1
+    i=0
+    until wpctl status >/dev/null 2>&1; do
+        sleep 0.1; i=$((i+1))
+        [ $i -ge 100 ] && { echo "audio: WirePlumber failed to start" >&2; exit 1; }
+    done
     amixer -c "$card_num" sset Master 74% unmute >/dev/null 2>&1
 fi
 SH
@@ -246,6 +254,7 @@ ConditionPathExists=/run/seatd.sock
 
 [Service]
 Type=simple
+Restart=on-failure
 PassEnvironment=CONTAINER_UID CONTAINER_GID CONTAINER_USER
 # KVM/virtio-gpu tuning — pass these from the host (compose.yaml or run.sh).
 # Leave unset on bare metal; wlroots will auto-select the best renderer/caps.
@@ -326,8 +335,11 @@ ExecStartPost=/bin/touch /etc/container-bootstrapped
 WantedBy=multi-user.target
 UNIT
 
-# Mask udevd (host udev DB is bind-mounted) and rtkit-daemon (fails in
-# user-namespaced containers; PipeWire falls back to normal scheduling).
+# Mask udevd and rtkit-daemon.
+# systemd-udev is installed for its libraries (mesa/libinput depend on them)
+# but the daemon can't run in a container — /dev is a tmpfs that doesn't match
+# the host udev database. rtkit-daemon fails in user-namespaced containers
+# (can't access /proc/sys/kernel/sched_rt_*); PipeWire falls back gracefully.
 RUN mkdir -p /etc/systemd/system && \
     ln -sf /dev/null /etc/systemd/system/systemd-udevd.service && \
     ln -sf /dev/null /etc/systemd/system/systemd-udevd-control.socket && \

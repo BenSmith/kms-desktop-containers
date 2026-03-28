@@ -1,0 +1,4 @@
+.env
+compose.yaml
+run.sh
+setup.sh
